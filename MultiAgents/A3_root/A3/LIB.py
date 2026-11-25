@@ -1,7 +1,6 @@
 import csv, ast, flask, pandas
 from pathlib import Path
 import numpy as np
-import matplotlib.pyplot as plt
 from typing import List
 
 app = flask.Flask(__name__)
@@ -14,6 +13,7 @@ def load_nodes():
             point = tuple(float(v) for v in ast.literal_eval(row["Points"]))
             nodes[int(row["Node"])] = {
                 "node": int(row["Node"]),
+                "agent": int(row["Agent"]) if row.get("Agent") else None,
                 "point": point,
                 "dirt": int(row["Dirt"])
             }
@@ -35,7 +35,7 @@ def index():
 def data():
     return flask.jsonify({"nodes": load_nodes(), "routes": load_routes()})
 
-class SpiralOrder:
+class SpiralOrder:  # Using my own spiral code I previously had
     def spiralOrder(self, matrix: List[List[int]]) -> List[int]:
         spiral = []
         m = len(matrix)
@@ -99,65 +99,64 @@ class SpiralOrder:
         return spiral
 
 
-def getMatrix(n,m):
-    count=0
-    matrix = np.zeros((n, m), dtype=int)
-    for i in range(n):
-        for j in range(m):
-            matrix[i][j] = count
-            count+=1
-    return matrix
-
+def make_path(cells, pathway, grid_size):
+    pathway = pathway.strip().lower()
+    if pathway in ("zz", "zigzag"):
+        return [
+            int(node)
+            for row_index, row in enumerate(cells)
+            for node in (row if row_index % 2 == 0 else row[::-1])
+        ]
+    elif pathway == "spiral":
+        return SpiralOrder().spiralOrder(cells.tolist())
+    elif pathway in ("rnm", "random"):
+        available = set(int(node) for node in cells.ravel())
+        path = [int(cells[0, 0])]
+        for _ in range(len(available) - 1):
+            row, col = divmod(path[-1], grid_size)
+            neighbors = [
+                node for node in available
+                if node != path[-1]
+                and abs(node // grid_size - row) <= 1
+                and abs(node % grid_size - col) <= 1
+            ]
+            path.append(int(np.random.choice(neighbors)))
+        return path
 
 def Parameters(Options):
     print(Options.Agents)
     print(Options.Pathways)
     print(Options.Nodes)
 
-    matrix = np.zeros((Options.Nodes, Options.Nodes))
-    S = np.zeros((matrix.size, matrix.size))
+    grid = np.arange(Options.Nodes**2).reshape(Options.Nodes, Options.Nodes)
+    row_groups = np.array_split(np.arange(Options.Nodes), Options.Agents)
+    routes = []
+    row_owners = {}
+    for agent, rows in enumerate(row_groups):
+        section = grid[rows, :]
+        path = make_path(section, Options.Pathways, Options.Nodes)
+        if path[0] != 0:
+            path.insert(0, 0)
+        path.append(0)
+        routes.extend({"Agent": agent, "Node": node} for node in path)
+        row_owners.update({int(row): agent for row in rows})
 
-    for i in range(matrix.shape[0]):
-        for j in range(matrix.shape[1]):
-            for x in range(-1, 2):
-                for y in range(-1, 2):
-                    if x == 0 and y == 0:
-                        continue
-                    try:
-                        S[np.ravel_multi_index((i, j), matrix.shape), np.ravel_multi_index((i + x, j + y), matrix.shape)] = 1
-                    except:
-                        continue
-
-    path = [0]
-    if Options.Pathways == "ZZ": # Zig Zag in the grid
-        columns = [[int(node) for node in nodes[x] if node != 0]
-                   for x in range(height)]
-        path = []
-        for i, column in enumerate(columns):
-            if i % 2 == 1:
-                column = column[::-1]
-            path.extend(column)
-
-    elif Options.Pathways == "Spiral": # Spiral in the grid
-        matrix = getMatrix(Options.Nodes,Options.Nodes)
-        path = SpiralOrder().spiralOrder(matrix)
-
-    elif Options.Pathways == "Rnm": # Random in the grid
-        for i in range(Options.Nodes**2-1):
-            neighbors = np.flatnonzero(S[path[-1]])
-            path.append(int(np.random.choice(neighbors)))
-        
-    # path = [1, 2, 3, 4]
-
-    pandas.DataFrame(
-        [{"Agent": a, "Node": p} for a in range(Options.Agents) for p in path]
-    ).to_csv("Routes.csv", index=False)
+    pandas.DataFrame(routes).to_csv("Routes.csv", index=False)
+    path_nodes = {route["Node"] for route in routes}
+    dirt_probability = Options.Dirt / 100
 
     rows = []
     n = 0
     for x in range(Options.Nodes):
         for y in range(Options.Nodes):
-            rows.append({"Node": n, "Points": f"({x},{y},0)", "Dirt": 0})
+            rows.append({
+                "Node": n,
+                "Agent": row_owners[x],
+                "Points": f"({y},{x},0)",
+                "Dirt": int(
+                    n in path_nodes and np.random.random() < dirt_probability
+                )
+            })
             n += 1
     pandas.DataFrame(rows).to_csv("Nodes.csv", index=False)
 

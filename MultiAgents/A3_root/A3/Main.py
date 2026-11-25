@@ -14,6 +14,7 @@ def main():
 	subparser = subparsers.add_parser("Parameters",  description = "Generates the dataset");
 	subparser.add_argument("--Agents", required = True, type = int, help = "Numbers of agents to create");
 	subparser.add_argument("--Nodes", required = True, type = int, help = "Numbers of nodes to create");
+	subparser.add_argument("--Dirt", required = True, type = float, help = "Percentage of dirt");
 	subparser.add_argument("--Pathways", required = True, type = str, help = "Pathways to follow: Spiral, ZigZag, Random");
 	subparser.set_defaults(func = LIB.Parameters);
 

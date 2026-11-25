@@ -6,6 +6,12 @@ let nodes = {}, routes = {};
 let agents = [];
 let running = false;
 let lastTime = 0;
+let simulationStartTime = null;
+let simulationEndTime = null;
+let simulationStartTick = null;
+let simulationEndTick = null;
+let initialDirtCount = 0;
+let cleanedDirtCount = 0;
 const SPEED = 2.0; // world units per second; identical for all agents
 
 const vertexShaderSource = `#version 300 es
@@ -120,10 +126,21 @@ function project(point) {
   return [px*1.7-0.85, py*1.5-0.70];
 }
 
+function cleanNode(nodeId) {
+  const node = nodes[nodeId];
+  if (node.dirt) {
+    node.dirt = 0;
+    cleanedDirtCount++;
+  }
+}
+
 function makeAgents() {
   agents = Object.entries(routes).map(([id, route]) => ({
-    id:Number(id), route, segment:0, t:0, done:route.length<2
+    id:Number(id), route, segment:0, t:0, done:route.length<2, moves:0
   }));
+  for (const agent of agents) {
+    if (agent.route.length) cleanNode(agent.route[0]);
+  }
 }
 
 function step(dt) {
@@ -139,6 +156,8 @@ function step(dt) {
     while (a.t >= 1) {
       a.t -= 1;
       a.segment++;
+      a.moves++;
+      cleanNode(a.route[a.segment]);
       if (a.segment >= a.route.length-1) {
         a.segment=a.route.length-1;
         a.t=0;
@@ -148,7 +167,11 @@ function step(dt) {
     }
   }
   // The simulation ends only after every agent has reached its final route node.
-  if (agents.length && agents.every(a=>a.done)) running=false;
+  if (agents.length && agents.every(a=>a.done)) {
+    running=false;
+    simulationEndTime=new Date();
+    simulationEndTick=performance.now();
+  }
 }
 
 function agentPosition(a) {
@@ -160,6 +183,17 @@ function agentPosition(a) {
     node.point[1]+(next.point[1]-node.point[1])*a.t,
     node.point[2]+(next.point[2]-node.point[2])*a.t
   ];
+}
+
+function visitedCellPercentage() {
+  const visited = new Set();
+  for (const agent of agents) {
+    for (let i = 0; i <= agent.segment; i++) {
+      visited.add(agent.route[i]);
+    }
+  }
+  const totalCells = Object.keys(nodes).length;
+  return totalCells ? visited.size / totalCells * 100 : 0;
 }
 
 function drawSprite(tex, pos, scale) {
@@ -188,8 +222,28 @@ function draw() {
   // Labels are rendered as HTML canvas overlay elements.
   updateLabels();
   const status = running ? "Running" : "Simulation stopped";
-  const states = agents.map(a=>`Agent ${a.id}: ${a.done ? "finished" : "moving"}`).join(" | ");
-  info.textContent = `${status} | ${states} | Speed: ${SPEED} units/s`;
+  const states = agents.map(a=>`Agent ${a.id}: ${a.done ? "finished" : "moving"}, moves: ${a.moves}`).join(" | ");
+  const started = simulationStartTime?.toLocaleTimeString() ?? "-";
+  const finished = simulationEndTime?.toLocaleTimeString() ?? "pending";
+  const endTick = simulationEndTick ?? performance.now();
+  const elapsed = simulationStartTick === null
+    ? "00:00:00.000"
+    : formatDuration(endTick - simulationStartTick);
+  const coverage = visitedCellPercentage().toFixed(1);
+  const cleanedPercentage = initialDirtCount
+    ? `${(cleanedDirtCount / initialDirtCount * 100).toFixed(1)}%`
+    : "N/A (no dirt)";
+  info.textContent = `${status} | Coverage: ${coverage}% | Cleaned: ${cleanedDirtCount}/${initialDirtCount} (${cleanedPercentage}) | Elapsed: ${elapsed} | ${states} | Speed: ${SPEED} units/s`;
+}
+
+function formatDuration(milliseconds) {
+  const totalMilliseconds = Math.floor(milliseconds);
+  const hours = Math.floor(totalMilliseconds / 3600000);
+  const minutes = Math.floor((totalMilliseconds % 3600000) / 60000);
+  const seconds = Math.floor((totalMilliseconds % 60000) / 1000);
+  const millis = totalMilliseconds % 1000;
+  return [hours, minutes, seconds].map(value => String(value).padStart(2, "0")).join(":")
+    + `.${String(millis).padStart(3, "0")}`;
 }
 
 function updateLabels() {
@@ -225,6 +279,7 @@ async function start() {
   const response=await fetch("/api/data");
   const data=await response.json();
   nodes=data.nodes; routes=data.routes;
+  initialDirtCount=Object.values(nodes).filter(node=>node.dirt).length;
   makeAgents();
 
   [robotTex,fullTex,emptyTex]=await Promise.all([
@@ -235,6 +290,8 @@ async function start() {
 
   resize();
   addEventListener("resize",resize);
+  simulationStartTime=new Date();
+  simulationStartTick=performance.now();
   running=true;
   requestAnimationFrame(animate);
 }
